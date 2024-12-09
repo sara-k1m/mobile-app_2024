@@ -27,7 +27,7 @@ fun AddRecipeScreen(
     var method by rememberSaveable { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     var isDialogOpen by remember { mutableStateOf(false) }
-    var isBookMarked by rememberSaveable { mutableStateOf(false) }
+    var bookMarked by rememberSaveable { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -78,8 +78,8 @@ fun AddRecipeScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Checkbox(
-                checked = isBookMarked,
-                onCheckedChange = { isBookMarked = it }
+                checked = bookMarked,
+                onCheckedChange = { bookMarked = it }
             )
             Text("즐겨찾기에 추가", style = MaterialTheme.typography.bodyLarge)
         }
@@ -95,7 +95,7 @@ fun AddRecipeScreen(
                         ingredients = ingredients.split(",").map { it.trim() },
                         method = method.split("\n").map { it.trim() },
                         category = listOf(selectedCategory!!),
-                        isBookMarked = isBookMarked // 즐겨찾기 여부 저장
+                        bookMarked = bookMarked // 즐겨찾기 여부 저장
                     )
                     saveRecipeToFirebaseDatabase(
                         userNickname = userNickname,
@@ -159,15 +159,17 @@ fun saveRecipeToFirebaseDatabase(
     onComplete: () -> Unit
 ) {
     val database = Firebase.database
-    val recipesRef = database.reference.child("users").child(userNickname).child("categories").child(category)
+    val recipesRef = database.reference
+        .child("users")
+        .child(userNickname)
+        .child("categories")
+        .child(category)
 
     recipesRef.push().setValue(recipe)
         .addOnSuccessListener {
             onComplete() // 저장 성공 시 호출
         }
         .addOnFailureListener { e ->
-            // 오류 로그 출력
-            e.printStackTrace()
-            println("Failed to save recipe: ${e.message}")
+            e.printStackTrace() // 오류 로그 출력
         }
 }

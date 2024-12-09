@@ -1,6 +1,7 @@
 package com.example.recipeapp.ui
 
 import AddRecipeScreen
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -12,6 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.mobileappproject.states.RecipeState
 import com.google.firebase.database.DataSnapshot
@@ -30,9 +33,12 @@ fun RecipeManagementScreen(
     val recipesState = remember { mutableStateListOf<RecipeState>() }
     var filteredRecipes by remember { mutableStateOf<List<RecipeState>>(emptyList()) }
     var currentPage by remember { mutableStateOf("menu") }
+    val pageStack = remember { mutableStateListOf<String>() } // 페이지 스택
     var isSearchDialogOpen by remember { mutableStateOf(false) }
+    var selectedCategory by remember { mutableStateOf("") }
+    var selectedRecipe by remember { mutableStateOf<RecipeState?>(null) }
 
-    // Load categories and recipes from Firebase Realtime Database
+    // Load categories
     LaunchedEffect(userNickname) {
         database.child("users").child(userNickname).child("categories")
             .addValueEventListener(object : com.google.firebase.database.ValueEventListener {
@@ -48,14 +54,25 @@ fun RecipeManagementScreen(
                     error.toException().printStackTrace()
                 }
             })
+    }
 
-        database.child("users").child(userNickname).child("recipes")
+    // Load recipes
+    LaunchedEffect(userNickname) {
+        database.child("users").child(userNickname).child("categories")
             .addValueEventListener(object : com.google.firebase.database.ValueEventListener {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     recipesState.clear()
-                    snapshot.children.forEach { recipeSnapshot ->
-                        val recipe = recipeSnapshot.getValue(RecipeState::class.java)
-                        recipe?.let { recipesState.add(it) }
+                    snapshot.children.forEach { categorySnapshot ->
+                        categorySnapshot.children.forEach { recipeSnapshot ->
+                            try {
+                                if (recipeSnapshot.value !is Boolean) {
+                                    val recipe = recipeSnapshot.getValue(RecipeState::class.java)
+                                    recipe?.let { recipesState.add(it) }
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
                     }
                 }
 
@@ -65,13 +82,28 @@ fun RecipeManagementScreen(
             })
     }
 
+    // 페이지 이동 함수
+    fun navigateTo(page: String) {
+        pageStack.add(currentPage) // 현재 페이지를 스택에 저장
+        currentPage = page
+    }
+
+    // "돌아가기" 처리 함수
+    fun navigateBack() {
+        if (pageStack.isNotEmpty()) {
+            currentPage = pageStack.removeAt(pageStack.size - 1) // 스택에서 이전 페이지로 이동
+        } else {
+            onBack() // 스택이 비어 있으면 앱 종료
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Recipe Manager") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -81,38 +113,59 @@ fun RecipeManagementScreen(
             "menu" -> RecipeMenuScreen(
                 userNickname = userNickname,
                 categories = categoriesState,
-                onNavigateToAdd = { currentPage = "Add" },
-                onNavigateToBookMark = { currentPage = "bookmarks" }, // 즐겨찾기 이동 처리
+                onNavigateToAdd = { navigateTo("Add") },
+                onNavigateToBookMark = { navigateTo("bookmarks") },
                 onCategorySelected = { category ->
-                    filteredRecipes = recipesState.filter { it.category.contains(category) }
-                    currentPage = "category"
+                    selectedCategory = category
+                    filteredRecipes = recipesState.filter { it.category.contains(selectedCategory) }
+                    navigateTo("category")
                 },
-                onSearch = { isSearchDialogOpen = true },
+                onSearch = { navigateTo("search") },
                 modifier = Modifier.padding(innerPadding)
             )
 
             "Add" -> AddRecipeScreen(
                 userNickname = userNickname,
                 categories = categoriesState,
-                returnToHome = { currentPage = "menu" },
+                returnToHome = { navigateBack() },
                 modifier = Modifier.padding(innerPadding)
             )
 
             "category" -> RecipeListScreenByCategory(
+                category = selectedCategory,
                 recipes = filteredRecipes,
                 onRecipeClick = { recipe ->
-                    // Handle recipe click (optional, navigate or show details)
+                    selectedRecipe = recipe
+                    navigateTo("details")
                 },
-                onBack = { currentPage = "menu" },
-                onNavigateToAdd = { currentPage = "Add" } // 수정: onNavigateToAdd 전달
+                onBack = { navigateBack() },
+                modifier = Modifier.padding(innerPadding)
             )
 
+            "details" -> selectedRecipe?.let { recipe ->
+                ShowRecipe(
+                    recipe = recipe,
+                    onBack = { navigateBack() }
+                )
+            }
+
             "bookmarks" -> FavoritesScreen(
-                favoriteRecipes = recipesState.filter { it.isBookMarked }, // isBookmarked 필터링
+                favoriteRecipes = recipesState.filter { it.bookMarked },
                 onRecipeClick = { recipe ->
-                    // 클릭 시 상세 화면으로 이동하거나 다른 동작 처리 가능
+                    selectedRecipe = recipe
+                    navigateTo("details")
                 },
-                returnToHome = { currentPage = "menu" }
+                returnToHome = { navigateBack() }
+            )
+
+            "search" -> SearchRecipeDialog(
+                isDialogOpen = true,
+                onDismiss = { navigateBack() },
+                recipes = recipesState,
+                onShowRecipe = { recipe ->
+                    selectedRecipe = recipe
+                    navigateTo("details")
+                }
             )
         }
 
@@ -121,13 +174,10 @@ fun RecipeManagementScreen(
                 isDialogOpen = isSearchDialogOpen,
                 onDismiss = { isSearchDialogOpen = false },
                 recipes = recipesState,
-                onShowRecipe = {
-                    filteredRecipes = listOf(it)
-                    currentPage = "category"
-                },
-                onShowResults = { results ->
-                    filteredRecipes = results
-                    currentPage = "category"
+                onShowRecipe = { recipe ->
+                    selectedRecipe = recipe
+                    isSearchDialogOpen = false // 다이얼로그 닫기
+                    navigateTo("details") // 세부 페이지로 이동
                 }
             )
         }
@@ -185,7 +235,7 @@ fun RecipeMenuScreen(
         // 추가 버튼 영역
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Row(
@@ -194,13 +244,21 @@ fun RecipeMenuScreen(
             ) {
                 Button(
                     onClick = onSearch,
-                    modifier = Modifier.weight(1f).height(100.dp)
+                    modifier = Modifier.weight(1f).height(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.DarkGray, // 배경색: 다크 그레이
+                        contentColor = Color.White // 텍스트 색상: 흰색
+                    )
                 ) {
                     Text("검색")
                 }
                 Button(
                     onClick = onNavigateToBookMark,
-                    modifier = Modifier.weight(1f).height(100.dp)
+                    modifier = Modifier.weight(1f).height(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.DarkGray, // 배경색: 다크 그레이
+                        contentColor = Color.White // 텍스트 색상: 흰색
+                    )
                 ) {
                     Text("즐겨찾기")
                 }
@@ -211,13 +269,21 @@ fun RecipeMenuScreen(
             ) {
                 Button(
                     onClick = { isDialogOpen = true },
-                    modifier = Modifier.weight(1f).height(100.dp)
+                    modifier = Modifier.weight(1f).height(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.DarkGray, // 배경색: 다크 그레이
+                        contentColor = Color.White // 텍스트 색상: 흰색
+                    )
                 ) {
                     Text("카테고리 추가")
                 }
                 Button(
                     onClick = onNavigateToAdd,
-                    modifier = Modifier.weight(1f).height(100.dp)
+                    modifier = Modifier.weight(1f).height(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.DarkGray, // 배경색: 다크 그레이
+                        contentColor = Color.White // 텍스트 색상: 흰색
+                    )
                 ) {
                     Text("레시피 추가")
                 }
@@ -260,73 +326,75 @@ fun RecipeMenuScreen(
     }
 }
 
-
-
-
 @Composable
 fun SearchRecipeDialog(
     isDialogOpen: Boolean,
     onDismiss: () -> Unit,
     recipes: List<RecipeState>,
-    onShowRecipe: (RecipeState) -> Unit,
-    onShowResults: (List<RecipeState>) -> Unit
+    onShowRecipe: (RecipeState) -> Unit
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var searchResults by remember { mutableStateOf<List<RecipeState>?>(null) }
+    var searchResults by remember { mutableStateOf<List<RecipeState>>(emptyList()) }
 
     if (isDialogOpen) {
         AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("레시피 검색") },
             text = {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
                     OutlinedTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        label = { Text("레시피 이름") },
+                        onValueChange = {
+                            searchQuery = it
+                            searchResults = if (searchQuery.isBlank()) {
+                                emptyList() // 검색어가 비어 있으면 결과 없음
+                            } else {
+                                recipes.filter { recipe ->
+                                    recipe.name.contains(searchQuery, ignoreCase = true)
+                                }
+                            }
+                        },
+                        label = { Text("레시피 이름 입력") },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    searchResults?.let { results ->
-                        if (results.isNotEmpty()) {
-                            Text(
-                                text = "결과: ${results.size}개 찾았습니다.",
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                        } else {
-                            Text(
-                                text = "결과가 없습니다.",
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(top = 8.dp)
-                            )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (searchQuery.isNotBlank() && searchResults.isNotEmpty()) {
+                        Column {
+                            searchResults.forEach { recipe ->
+                                OutlinedButton(
+                                    onClick = {
+                                        onShowRecipe(recipe) // 세부 정보 표시
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.surface,
+                                        contentColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text(recipe.name.ifEmpty { "이름 없음" })
+                                }
+                            }
                         }
+                    } else if (searchQuery.isNotBlank()) {
+                        Text(
+                            text = "검색 결과가 없습니다.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
                     }
                 }
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        val results = recipes.filter { recipe ->
-                            recipe.name.contains(searchQuery, ignoreCase = true)
-                        }
-                        searchResults = results
-                        when {
-                            results.isEmpty() -> { /* 검색 결과 없음 처리 */ }
-                            results.size == 1 -> {
-                                onDismiss()
-                                onShowRecipe(results.first())
-                            }
-                            results.size > 1 -> {
-                                onDismiss()
-                                onShowResults(results)
-                            }
-                        }
-                    }
-                ) {
-                    Text("검색")
-                }
-            },
-            dismissButton = {
                 TextButton(onClick = onDismiss) {
                     Text("닫기")
                 }
@@ -340,95 +408,36 @@ fun ShowRecipe(recipe: RecipeState, onBack: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
-            .padding(top = 96.dp)
+            .padding(32.dp) ,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(text = recipe.name, style = MaterialTheme.typography.titleLarge)
+        Text(
+            text = recipe.name.ifEmpty { "이름 없음" },
+            style = MaterialTheme.typography.titleLarge
+        )
         Spacer(modifier = Modifier.height(8.dp))
-        Text(text = "재료: ${recipe.ingredients.joinToString(", ")}")
+        Text(
+            text = "재료: ${
+                if (recipe.ingredients.isNotEmpty())
+                    recipe.ingredients.joinToString(", ")
+                else
+                    "재료 없음"
+            }"
+        )
         Spacer(modifier = Modifier.height(8.dp))
-        Text(text = "방법: ${recipe.method.joinToString(", ")}")
+        Text(
+            text = "방법:\n${
+                if (recipe.method.isNotEmpty())
+                    recipe.method.joinToString("\n")
+                else
+                    "조리 방법 없음"
+            }"
+        )
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = onBack) {
-            Text("돌아가기")
-        }
+        Button(onClick = onBack) { Text("돌아가기") }
     }
 }
 
-@Composable
-fun RecipeListScreenByCategory(
-    recipes: List<RecipeState>,
-    onRecipeClick: (RecipeState) -> Unit,
-    onBack: () -> Unit,
-    onNavigateToAdd: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .padding(top = 96.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = "레시피 목록", style = MaterialTheme.typography.titleLarge)
-            IconButton(onClick = onNavigateToAdd ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Recipe to Category")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        recipes.forEach { recipe ->
-            Button(
-                onClick = { onRecipeClick(recipe) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-            ) {
-                Text(recipe.name)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(onClick = onBack) {
-            Text("돌아가기")
-        }
-    }
-}
-
-@Composable
-fun RecipeListScreen(
-    recipes: List<RecipeState>,
-    onRecipeClick: (RecipeState) -> Unit,
-    onBack: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .padding(top = 96.dp)
-    ) {
-        Text(text = "레시피 목록", style = MaterialTheme.typography.titleLarge)
-        Spacer(modifier = Modifier.height(8.dp))
-        recipes.forEach { recipe ->
-            Button(
-                onClick = { onRecipeClick(recipe) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-            ) {
-                Text(recipe.name)
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = onBack) {
-            Text("돌아가기")
-        }
-    }
-}
 
 @Composable
 fun FavoritesScreen(
@@ -438,50 +447,94 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
-            .padding(16.dp)
-            .padding(top = 64.dp)
+            .padding(16.dp) // 전체 화면에 적용될 여백
     ) {
+        Spacer(modifier = Modifier.height(64.dp)) // 텍스트 위쪽에 여백 추가
+
         Text(
             text = "즐겨찾기 레시피",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(bottom = 16.dp)
+            style = MaterialTheme.typography.titleLarge
         )
+        Spacer(modifier = Modifier.height(8.dp))
 
-        if (favoriteRecipes.isEmpty()) {
-            Text("즐겨찾기한 레시피가 없습니다.", style = MaterialTheme.typography.bodyLarge)
-        } else {
+        if (favoriteRecipes.isNotEmpty()) {
             favoriteRecipes.forEach { recipe ->
-                RecipeItem(recipe = recipe, onClick = { onRecipeClick(recipe) })
+                OutlinedButton( // OutlinedButton으로 테두리 스타일 적용
+                    onClick = { onRecipeClick(recipe) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface, // 버튼 채우기 색상: 흰색
+                        contentColor = MaterialTheme.colorScheme.primary // 텍스트 색상: 기본 색상
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary) // 테두리 색상
+                ) {
+                    Text(recipe.name.takeIf { it.isNotBlank() } ?: "이름 없음")
+                }
             }
+        } else {
+            Text(
+                text = "즐겨찾기된 레시피가 없습니다.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        Button(onClick = returnToHome, modifier = Modifier.align(Alignment.End)) {
-            Text("홈으로 돌아가기")
+        Button(
+            onClick = returnToHome,
+        ) {
+            Text("돌아가기")
         }
     }
 }
 
+
+
+
 @Composable
-fun RecipeItem(
-    recipe: RecipeState,
-    onClick: () -> Unit
+fun RecipeListScreenByCategory(
+    category: String,
+    recipes: List<RecipeState>,
+    onRecipeClick: (RecipeState) -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-            .clickable { onClick() }
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
     ) {
-        Text(
-            text = recipe.name,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f)
-        )
+        Text("${category}의 레시피 목록", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (recipes.isNotEmpty()) {
+            recipes.forEach { recipe ->
+                Button(
+                    onClick = { onRecipeClick(recipe) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Text(recipe.name.ifEmpty { "이름 없음" })
+                }
+            }
+        } else {
+            Text(
+                text = "이 카테고리에 레시피가 없습니다.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onBack) { Text("돌아가기") }
     }
 }

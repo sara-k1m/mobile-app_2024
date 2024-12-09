@@ -4,10 +4,10 @@ import java.util.UUID
 
 data class RecipeState(
     val id: String = UUID.randomUUID().toString(),
-    val userNickname: String,  // User ID to associate recipes with the logged-in user
+    val userNickname: String = "",  // User ID to associate recipes with the logged-in user
     val name: String = "",
     val ingredients: List<String> = emptyList(),
     val method: List<String> = emptyList(),
-    val category: List<String> = emptyList(),
-    val isBookMarked: Boolean = false,
+    var category: List<String> = emptyList(),
+    val bookMarked: Boolean = false,
 )
